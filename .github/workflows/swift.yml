@@ -45,7 +45,7 @@ jobs:
       - name: Build Universal App (${{ env.CONFIGURATION }})
         run: |
           echo "Building ${APP_NAME} (${CONFIGURATION}) for x86_64 and arm64..."
-          xcodebuild clean build \
+          xcodebuild build \
             -project "${TARGET_NAME}.xcodeproj" \
             -target "${TARGET_NAME}" \
             -configuration "${CONFIGURATION}" \
