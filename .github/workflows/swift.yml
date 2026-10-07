@@ -50,7 +50,8 @@ jobs:
             -target "${TARGET_NAME}" \
             -configuration "${CONFIGURATION}" \
             -sdk macosx \
-            -derivedDataPath build \
+            SYMROOT="$(pwd)/build" \
+            OBJROOT="$(pwd)/build/obj" \
             ARCHS="x86_64 arm64" \
             ONLY_ACTIVE_ARCH=NO \
             MACOSX_DEPLOYMENT_TARGET=13.0 \
@@ -59,28 +60,42 @@ jobs:
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGN_IDENTITY=""
 
-          # Ensure app bundle is named Nothing X.app
-          if [ -d "build/Build/Products/${CONFIGURATION}/${TARGET_NAME}.app" ] && [ ! -d "build/Build/Products/${CONFIGURATION}/${APP_NAME}.app" ]; then
-            mv "build/Build/Products/${CONFIGURATION}/${TARGET_NAME}.app" "build/Build/Products/${CONFIGURATION}/${APP_NAME}.app"
+          # Locate built app and ensure it is named Nothing X.app
+          if [ -d "build/${CONFIGURATION}/${APP_NAME}.app" ]; then
+            APP_PATH="build/${CONFIGURATION}/${APP_NAME}.app"
+          elif [ -d "build/${CONFIGURATION}/${TARGET_NAME}.app" ]; then
+            mv "build/${CONFIGURATION}/${TARGET_NAME}.app" "build/${CONFIGURATION}/${APP_NAME}.app"
+            APP_PATH="build/${CONFIGURATION}/${APP_NAME}.app"
+          else
+            FOUND_APP=$(find build -name "*.app" -type d | head -n 1)
+            if [ -n "$FOUND_APP" ]; then
+              mkdir -p "build/${CONFIGURATION}"
+              mv "$FOUND_APP" "build/${CONFIGURATION}/${APP_NAME}.app"
+              APP_PATH="build/${CONFIGURATION}/${APP_NAME}.app"
+            else
+              echo "Error: No .app bundle found in build folder!"
+              exit 1
+            fi
           fi
+          echo "Found app at: ${APP_PATH}"
+          echo "APP_PATH=${APP_PATH}" >> $GITHUB_ENV
 
       - name: Ad-hoc Code Sign App Bundle
         run: |
-          APP_PATH="build/Build/Products/${CONFIGURATION}/${APP_NAME}.app"
           echo "Ad-hoc signing ${APP_PATH}..."
           codesign --force --deep --sign - \
-            --entitlements "${TARGET_NAME}/${TARGET_NAME// /_}.entitlements" \
+            --entitlements "${TARGET_NAME}/Nothing_X_MacOS.entitlements" \
             "${APP_PATH}"
 
           echo "Verifying code signature:"
           codesign -vvv --deep --strict "${APP_PATH}"
 
           echo "Verifying binary architectures:"
-          lipo -info "${APP_PATH}/Contents/MacOS/${APP_NAME}"
+          EXEC_NAME=$(/usr/libexec/PlistBuddy -c "Print :CFBundleExecutable" "${APP_PATH}/Contents/Info.plist")
+          lipo -info "${APP_PATH}/Contents/MacOS/${EXEC_NAME}"
 
       - name: Package App Bundle into ZIP
         run: |
-          APP_PATH="build/Build/Products/${CONFIGURATION}/${APP_NAME}.app"
           ZIP_NAME="${APP_NAME}.zip"
           echo "Archiving ${APP_PATH} to ${ZIP_NAME} using ditto..."
           ditto -c -k --keepParent "${APP_PATH}" "${ZIP_NAME}"
