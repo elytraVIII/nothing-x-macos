@@ -1,9 +1,8 @@
-# CI build for the macOS app.
-# This is an Xcode project (there is no Package.swift), so it is built with
-# xcodebuild. `swift build` / `swift test` only work for SwiftPM packages and
-# fail here with "error: could not find Package.swift".
+# CI build and packaging for Nothing X macOS app.
+# Configured to build a Universal binary (x86_64 + arm64) compatible with Intel Macs
+# (macOS 13+ Ventura) and Apple Silicon Macs, then produce a downloadable ZIP artifact.
 
-name: Swift
+name: Nothing X
 
 on:
   push:
@@ -11,21 +10,85 @@ on:
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
+    inputs:
+      configuration:
+        description: 'Build configuration (Release or Debug)'
+        required: false
+        default: 'Release'
+        type: choice
+        options:
+          - Release
+          - Debug
 
 jobs:
   build:
-
+    name: Build & Package (${{ github.event.inputs.configuration || 'Release' }})
     runs-on: macos-latest
 
+    env:
+      CONFIGURATION: ${{ github.event.inputs.configuration || 'Release' }}
+      TARGET_NAME: "Nothing X MacOS"
+      APP_NAME: "Nothing X"
+
     steps:
-    - uses: actions/checkout@v4
-    - name: Build (unsigned)
-      run: |
-        xcodebuild build \
-          -project "Nothing X MacOS.xcodeproj" \
-          -target "Nothing X MacOS" \
-          -configuration Debug \
-          -sdk macosx \
-          CODE_SIGNING_ALLOWED=NO \
-          CODE_SIGNING_REQUIRED=NO \
-          CODE_SIGN_IDENTITY=""
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Environment Diagnostics
+        run: |
+          echo "=== System Info ==="
+          sw_vers
+          uname -a
+          echo "=== Xcode Version ==="
+          xcodebuild -version
+
+      - name: Build Universal App (${{ env.CONFIGURATION }})
+        run: |
+          echo "Building ${APP_NAME} (${CONFIGURATION}) for x86_64 and arm64..."
+          xcodebuild clean build \
+            -project "${TARGET_NAME}.xcodeproj" \
+            -target "${TARGET_NAME}" \
+            -configuration "${CONFIGURATION}" \
+            -sdk macosx \
+            -derivedDataPath build \
+            ARCHS="x86_64 arm64" \
+            ONLY_ACTIVE_ARCH=NO \
+            MACOSX_DEPLOYMENT_TARGET=13.0 \
+            PRODUCT_NAME="${APP_NAME}" \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY=""
+
+          # Ensure app bundle is named Nothing X.app
+          if [ -d "build/Build/Products/${CONFIGURATION}/${TARGET_NAME}.app" ] && [ ! -d "build/Build/Products/${CONFIGURATION}/${APP_NAME}.app" ]; then
+            mv "build/Build/Products/${CONFIGURATION}/${TARGET_NAME}.app" "build/Build/Products/${CONFIGURATION}/${APP_NAME}.app"
+          fi
+
+      - name: Ad-hoc Code Sign App Bundle
+        run: |
+          APP_PATH="build/Build/Products/${CONFIGURATION}/${APP_NAME}.app"
+          echo "Ad-hoc signing ${APP_PATH}..."
+          codesign --force --deep --sign - \
+            --entitlements "${TARGET_NAME}/${TARGET_NAME// /_}.entitlements" \
+            "${APP_PATH}"
+
+          echo "Verifying code signature:"
+          codesign -vvv --deep --strict "${APP_PATH}"
+
+          echo "Verifying binary architectures:"
+          lipo -info "${APP_PATH}/Contents/MacOS/${APP_NAME}"
+
+      - name: Package App Bundle into ZIP
+        run: |
+          APP_PATH="build/Build/Products/${CONFIGURATION}/${APP_NAME}.app"
+          ZIP_NAME="${APP_NAME}.zip"
+          echo "Archiving ${APP_PATH} to ${ZIP_NAME} using ditto..."
+          ditto -c -k --keepParent "${APP_PATH}" "${ZIP_NAME}"
+          ls -lh "${ZIP_NAME}"
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Nothing X
+          path: Nothing X.zip
+          retention-days: 30
